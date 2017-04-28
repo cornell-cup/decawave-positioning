@@ -52,7 +52,7 @@
 #   define    DWID 1      // DecaWave Ranging ID
 #endif
 #ifndef NUM_TAGS
-#   define    NUM_TAGS 1  // Number of active tags
+#   define    NUM_TAGS 3  // Number of active tags
 #endif
 
 // Connection pins
@@ -92,10 +92,17 @@ volatile byte expectedMsgId = POLL_REQ;
 // message sent/received state
 volatile boolean sentAck = false;
 volatile boolean receivedAck = false;
+// protocol error state
+boolean protocolFailed = false;
 // timestamps to remember
 DW1000Time timePollSent;
+DW1000Time timePollReceived;
+DW1000Time timePollAckSent;
 DW1000Time timePollAckReceived;
 DW1000Time timeRangeSent;
+DW1000Time timeRangeReceived;
+// last computed range/time
+DW1000Time timeComputedRange;
 // data buffer
 #define LEN_DATA 16
 byte data[LEN_DATA];
@@ -104,6 +111,11 @@ uint32_t lastActivity;
 uint32_t resetPeriod = 250;
 // reply times (same on both sides for symm. ranging)
 uint16_t replyDelayTimeUS = 3000;
+
+// ranging counter (per second)
+uint16_t successRangingCount = 0;
+uint32_t rangingCountPeriod = 0;
+float samplingRate = 0;
 
 // The current tag being polled
 uint8_t current_tag = 1;
@@ -153,6 +165,8 @@ void handleReceived() {
   receivedAck = true;
 }
 
+/******** TAG POLL FUNCTIONS ********/
+
 // Sent a poll message
 void transmitPoll() {
   DW1000.newTransmit();
@@ -182,6 +196,65 @@ void transmitRange() {
   Serial.println(F("Sent range"));
 #endif
 }
+
+/******** END TAG POLL FUNCTIONS ********/
+
+/******** ANCHOR POLL FUNCTIONS ********/
+
+// Send a poll request message
+void transmitPollReq() {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = POLL_REQ;
+  data[1] = current_tag; // ID to request from
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.print("Sent poll request "); Serial.println(current_tag);
+#endif
+}
+
+// Send a poll acknowledgement
+void transmitPollAck() {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = POLL_ACK;
+  // delay the same amount as ranging tag
+  DW1000Time deltaTime = DW1000Time(replyDelayTimeUS, DW1000Time::MICROSECONDS);
+  DW1000.setDelay(deltaTime);
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent poll ack");
+#endif
+}
+
+// Send a range report
+void transmitRangeReport(float curRange) {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = RANGE_REPORT;
+  memcpy(data + 1, &curRange, 4);
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent range report");
+#endif
+}
+
+// Send a range failure message
+void transmitRangeFailed() {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = RANGE_FAILED;
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent range failed");
+#endif
+}
+
+/******** END ANCHOR POLL FUNCTIONS ********/
 
 // Receive a new message
 void receiver() {
@@ -231,9 +304,11 @@ void loop() {
   if (Serial.available() > 0) {
     int c = Serial.read();
     if (c == MODE_POLL) {
+      expectedMsgId = POLL;
       mode_fn = loop_poll;
     }
     else if (c == MODE_DETECT) {
+      expectedMsgId = POLL_REQ;
       mode_fn = loop_detect;
     }
     else if (c == MODE_SAVE) {
@@ -326,8 +401,102 @@ void loop_poll() {
 }
 
 void loop_detect() {
-  // TODO
-  Serial.println(F("TODO detect"));
+  int32_t curMillis = millis();
+  if (!sentAck && !receivedAck) {
+    // check if inactive
+    if (curMillis - lastActivity > resetPeriod) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      if (current_tag == DWID) {
+        current_tag++;
+      }
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      expectedMsgId = POLL;
+      transmitPollReq();
+      noteActivity();
+    }
+    return;
+  }
+
+  // continue on any success confirmation
+  if (sentAck) {
+    sentAck = false;
+    byte msgId = data[0];
+    if (msgId == POLL_REQ) {
+      noteActivity();
+    }
+    else if (msgId == POLL_ACK) {
+      DW1000.getTransmitTimestamp(timePollAckSent);
+      noteActivity();
+    }
+  }
+  if (receivedAck) {
+    receivedAck = false;
+    // get message and parse
+    DW1000.getData(data, LEN_DATA);
+    byte msgId = data[0];
+    if (msgId != expectedMsgId) {
+      // unexpected message, start over again (except if already POLL)
+      protocolFailed = true;
+    }
+    if (msgId == POLL) {
+      // on POLL we (re-)start, so no protocol failure
+      protocolFailed = false;
+      DW1000.getReceiveTimestamp(timePollReceived);
+      expectedMsgId = RANGE;
+      transmitPollAck();
+      noteActivity();
+    }
+    else if (msgId == RANGE) {
+      DW1000.getReceiveTimestamp(timeRangeReceived);
+      expectedMsgId = POLL;
+      if (!protocolFailed) {
+        timePollSent.setTimestamp(data + 1);
+        timePollAckReceived.setTimestamp(data + 6);
+        timeRangeSent.setTimestamp(data + 11);
+        // (re-)compute range as two-way ranging is done
+        computeRangeAsymmetric(); // CHOSEN RANGING ALGORITHM
+        transmitRangeReport(timeComputedRange.getAsMicroSeconds());
+        float distance = timeComputedRange.getAsMeters();
+        Serial.print("Tag: "); Serial.print(current_tag);
+        Serial.print("\t Range: "); Serial.print(distance); Serial.print(" m");
+        Serial.print("\t RX power: "); Serial.print(DW1000.getReceivePower()); Serial.print(" dBm");
+        Serial.print("\t Sampling: "); Serial.print(samplingRate); Serial.println(" Hz");
+        //Serial.print("FP power is [dBm]: "); Serial.print(DW1000.getFirstPathPower());
+        //Serial.print("RX power is [dBm]: "); Serial.println(DW1000.getReceivePower());
+        //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
+        // update sampling rate (each second)
+        successRangingCount++;
+        if (curMillis - rangingCountPeriod > 1000) {
+          samplingRate = (1000.0f * successRangingCount) / (curMillis - rangingCountPeriod);
+          rangingCountPeriod = curMillis;
+          successRangingCount = 0;
+        }
+      }
+      else {
+        transmitRangeFailed();
+      }
+
+      // Request to poll the next tag
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      if (current_tag == DWID) {
+        current_tag++;
+      }
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      expectedMsgId = POLL;
+      transmitPollReq();
+      noteActivity();
+    }
+  }
 }
 
 void loop_save() {

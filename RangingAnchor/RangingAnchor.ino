@@ -49,7 +49,7 @@
 #   define    DWID 0      // DecaWave Ranging ID
 #endif
 #ifndef NUM_TAGS
-#   define    NUM_TAGS 1  // Number of active tags
+#   define    NUM_TAGS 3  // Number of active tags
 #endif
 
 // Connection pins
@@ -106,6 +106,7 @@ uint32_t lastActivity;
 uint32_t resetPeriod = 250;
 // reply times (same on both sides for symm. ranging)
 uint16_t replyDelayTimeUS = 3000;
+
 // ranging counter (per second)
 uint16_t successRangingCount = 0;
 uint32_t rangingCountPeriod = 0;
@@ -261,6 +262,7 @@ void loop() {
   if (Serial.available() > 0) {
     int c = Serial.read();
     if (c == MODE_POLL) {
+      expectedMsgId = POLL;
       mode_fn = loop_poll;
     }
     else if (c == MODE_QUERY) {
