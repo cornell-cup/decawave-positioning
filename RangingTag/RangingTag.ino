@@ -118,6 +118,10 @@ uint16_t successRangingCount = 0;
 uint32_t rangingCountPeriod = 0;
 float samplingRate = 0;
 
+// Detected distances to other tags
+float detect_dists[NUM_TAGS + 1] = {0.f};
+int detect_samples[NUM_TAGS + 1] = {0};
+
 // The current tag being polled
 uint8_t current_tag = 1;
 
@@ -470,6 +474,11 @@ void loop_detect() {
         //Serial.print("FP power is [dBm]: "); Serial.print(DW1000.getFirstPathPower());
         //Serial.print("RX power is [dBm]: "); Serial.println(DW1000.getReceivePower());
         //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
+        // Save the distance if it looks reasonable
+        if (distance > 0 && distance < MAX_RANGE) {
+          detect_dists[current_tag] += distance;
+          detect_samples[current_tag]++;
+        }
         // update sampling rate (each second)
         successRangingCount++;
         if (curMillis - rangingCountPeriod > 1000) {
@@ -524,4 +533,14 @@ void loop_info() {
   DW1000.getPrintableDeviceMode(msg);
   Serial.print("Device mode: "); Serial.println(msg);
   Serial.print("Ranging ID: "); Serial.println(DWID);
+  Serial.println();
+
+  Serial.println("Distances:");
+  for (int i = 0; i <= NUM_TAGS; i++) {
+    Serial.print(detect_samples[i]);
+    Serial.print("\t");
+    Serial.print(detect_dists[i]);
+    Serial.print("\t");
+    Serial.println(detect_dists[i] / detect_samples[i]);
+  }
 }
