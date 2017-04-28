@@ -111,7 +111,7 @@ uint8_t current_tag = 1;
 void setup() {
   // Serial
   Serial.begin(115200);
-  Serial.println(F("### DW1000 Arduino Ranging Tag ###"));
+  delay(500);
 
   // Initialize the driver
   DW1000.begin(PIN_IRQ, PIN_RST);
@@ -124,7 +124,6 @@ void setup() {
   DW1000.setNetworkId(10);
   DW1000.enableMode(DW1000.MODE_LONGDATA_RANGE_LOWPOWER);
   DW1000.commitConfiguration();
-  Serial.println(F("Committed configuration ..."));
 
   // Information
   loop_info();
@@ -154,6 +153,7 @@ void handleReceived() {
   receivedAck = true;
 }
 
+// Sent a poll message
 void transmitPoll() {
   DW1000.newTransmit();
   DW1000.setDefaults();
@@ -165,6 +165,7 @@ void transmitPoll() {
 #endif
 }
 
+// Send range timestamp
 void transmitRange() {
   DW1000.newTransmit();
   DW1000.setDefaults();
@@ -182,6 +183,7 @@ void transmitRange() {
 #endif
 }
 
+// Receive a new message
 void receiver() {
   DW1000.newReceive();
   DW1000.setDefaults();
@@ -301,10 +303,6 @@ void loop_send() {
 
 void loop_info() {
   Serial.println(F("### DW1000 Arduino Ranging Tag ###"));
-
-  // Initialize the driver
-  DW1000.begin(PIN_IRQ, PIN_RST);
-  DW1000.select(PIN_SS);
 
   // Information
   char msg[128];
