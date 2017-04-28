@@ -43,25 +43,45 @@
 #include <SPI.h>
 #include <DW1000.h>
 
-// ID
-const uint8_t DWID = 0;
-// Number of active tags
-uint8_t current_tag = 1;
-const uint8_t NUM_TAGS = 2;
+/******** CONFIGURATION VARIABLES ********/
+#undef        DEBUG       // Debugging
+#ifndef DWID
+#   define    DWID 0      // DecaWave Ranging ID
+#endif
+#ifndef NUM_TAGS
+#   define    NUM_TAGS 1  // Number of active tags
+#endif
 
-// connection pins
-const uint8_t PIN_RST = 9; // reset pin
-const uint8_t PIN_IRQ = 2; // irq pin
-const uint8_t PIN_SS = SS; // spi select pin
+// Connection pins
+#define PIN_RST 9  // reset pin
+#define PIN_IRQ 2  // irq pin
+#define PIN_SS  SS // spi select pin
+/******** END CONFIGURATION VARIABLES ********/
 
-// messages used in the ranging protocol
-// TODO replace by enum
-#define POLL 0
-#define POLL_ACK 1
-#define RANGE 2
-#define RANGE_REPORT 3
-#define RANGE_FAILED 255
-#define POLL_REQ 250
+/******** ENUMS ********/
+// Modes available
+#define MODE_POLL     'P' // Poll distances
+#define MODE_QUERY    'Q' // Query distances to other tags
+#define MODE_SAVE     'S' // Save distances to other tags to EEPROM
+#define MODE_INFO     'I' // Display info
+
+void loop_poll();
+void loop_query();
+void loop_save();
+void loop_info();
+
+// Messages used in the ranging protocol
+#define POLL          0
+#define POLL_ACK      1
+#define RANGE         2
+#define RANGE_REPORT  3
+#define POLL_REQ      250
+#define RANGE_FAILED  255
+/******** END ENUMS ********/
+
+// Current mode function pointer
+void (*mode_fn)();
+
 // message flow state
 volatile byte expectedMsgId = POLL;
 // message sent/received state
@@ -91,112 +111,114 @@ uint16_t successRangingCount = 0;
 uint32_t rangingCountPeriod = 0;
 float samplingRate = 0;
 
+// The current tag begin polled
+uint8_t current_tag = 1;
+
 void setup() {
-    // DEBUG monitoring
-    Serial.begin(115200);
-    delay(1000);
-    Serial.println(F("### DW1000-arduino-ranging-anchor ###"));
-    // initialize the driver
-    DW1000.begin(PIN_IRQ, PIN_RST);
-    DW1000.select(PIN_SS);
-    Serial.println(F("DW1000 initialized ..."));
-    // general configuration
-    DW1000.newConfiguration();
-    DW1000.setDefaults();
-    DW1000.setDeviceAddress(1);
-    DW1000.setNetworkId(10);
-    DW1000.enableMode(DW1000.MODE_LONGDATA_RANGE_LOWPOWER);
-    DW1000.commitConfiguration();
-    Serial.println(F("Committed configuration ..."));
-    // DEBUG chip info and registers pretty printed
-    char msg[128];
-    DW1000.getPrintableDeviceIdentifier(msg);
-    Serial.print("Device ID: "); Serial.println(msg);
-    DW1000.getPrintableExtendedUniqueIdentifier(msg);
-    Serial.print("Unique ID: "); Serial.println(msg);
-    DW1000.getPrintableNetworkIdAndShortAddress(msg);
-    Serial.print("Network ID & Device Address: "); Serial.println(msg);
-    DW1000.getPrintableDeviceMode(msg);
-    Serial.print("Device mode: "); Serial.println(msg);
-    // attach callback for (successfully) sent and received messages
-    DW1000.attachSentHandler(handleSent);
-    DW1000.attachReceivedHandler(handleReceived);
+  // Serial
+  Serial.begin(115200);
+  delay(500);
 
-    receiver();
-    noteActivity();
-    rangingCountPeriod = millis();
+  // Initialize the driver
+  DW1000.begin(PIN_IRQ, PIN_RST);
+  DW1000.select(PIN_SS);
+
+  // General configuration
+  DW1000.newConfiguration();
+  DW1000.setDefaults();
+  DW1000.setDeviceAddress(1);
+  DW1000.setNetworkId(10);
+  DW1000.enableMode(DW1000.MODE_LONGDATA_RANGE_LOWPOWER);
+  DW1000.commitConfiguration();
+
+  // Information
+  loop_info();
+
+  // Attach callbacks
+  DW1000.attachSentHandler(handleSent);
+  DW1000.attachReceivedHandler(handleReceived);
+
+  receiver();
+  noteActivity();
+  rangingCountPeriod = millis();
+
+  mode_fn = loop_poll;
 }
 
-void noteActivity() {
-    // update activity timestamp, so that we do not reach "resetPeriod"
-    lastActivity = millis();
+// Update activity timestamp
+inline void noteActivity() {
+  lastActivity = millis();
 }
 
-void resetInactive() {
-    // anchor listens for POLL
-    expectedMsgId = POLL;
-    receiver();
-    noteActivity();
-}
-
+// Status change on sent success
 void handleSent() {
-    // status change on sent success
-    sentAck = true;
+  sentAck = true;
 }
 
+// Status change on received success
 void handleReceived() {
-    // status change on received success
-    receivedAck = true;
+  receivedAck = true;
 }
 
+// Send a poll request message
 void transmitPollReq() {
-    DW1000.newTransmit();
-    DW1000.setDefaults();
-    data[0] = POLL_REQ;
-    data[1] = current_tag; // ID to request from
-    DW1000.setData(data, LEN_DATA);
-    DW1000.startTransmit();
-    //Serial.print("Sent poll request "); Serial.println(current_tag);
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = POLL_REQ;
+  data[1] = current_tag; // ID to request from
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.print("Sent poll request "); Serial.println(current_tag);
+#endif
 }
 
+// Send a poll acknowledgement
 void transmitPollAck() {
-    DW1000.newTransmit();
-    DW1000.setDefaults();
-    data[0] = POLL_ACK;
-    // delay the same amount as ranging tag
-    DW1000Time deltaTime = DW1000Time(replyDelayTimeUS, DW1000Time::MICROSECONDS);
-    DW1000.setDelay(deltaTime);
-    DW1000.setData(data, LEN_DATA);
-    DW1000.startTransmit();
-    //Serial.println("Sent poll ack");
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = POLL_ACK;
+  // delay the same amount as ranging tag
+  DW1000Time deltaTime = DW1000Time(replyDelayTimeUS, DW1000Time::MICROSECONDS);
+  DW1000.setDelay(deltaTime);
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent poll ack");
+#endif
 }
 
+// Send a range report
 void transmitRangeReport(float curRange) {
-    DW1000.newTransmit();
-    DW1000.setDefaults();
-    data[0] = RANGE_REPORT;
-    // write final ranging result
-    memcpy(data + 1, &curRange, 4);
-    DW1000.setData(data, LEN_DATA);
-    DW1000.startTransmit();
-    //Serial.println("Sent range report");
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = RANGE_REPORT;
+  memcpy(data + 1, &curRange, 4);
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent range report");
+#endif
 }
 
+// Send a range failure message
 void transmitRangeFailed() {
-    DW1000.newTransmit();
-    DW1000.setDefaults();
-    data[0] = RANGE_FAILED;
-    DW1000.setData(data, LEN_DATA);
-    DW1000.startTransmit();
-    //Serial.println("Sent range failed");
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = RANGE_FAILED;
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent range failed");
+#endif
 }
 
+// Receive a new message
 void receiver() {
-    DW1000.newReceive();
-    DW1000.setDefaults();
-    // so we don't need to restart the receiver manually
-    DW1000.receivePermanently(true);
-    DW1000.startReceive();
+  DW1000.newReceive();
+  DW1000.setDefaults();
+  DW1000.receivePermanently(true);
+  DW1000.startReceive();
 }
 
 /*
@@ -212,22 +234,22 @@ void receiver() {
  */
 
 void computeRangeAsymmetric() {
-    // asymmetric two-way ranging (more computation intense, less error prone)
-    DW1000Time round1 = (timePollAckReceived - timePollSent).wrap();
-    DW1000Time reply1 = (timePollAckSent - timePollReceived).wrap();
-    DW1000Time round2 = (timeRangeReceived - timePollAckSent).wrap();
-    DW1000Time reply2 = (timeRangeSent - timePollAckReceived).wrap();
-    DW1000Time tof = (round1 * round2 - reply1 * reply2) / (round1 + round2 + reply1 + reply2);
-    // set tof timestamp
-    timeComputedRange.setTimestamp(tof);
+  // asymmetric two-way ranging (more computation intense, less error prone)
+  DW1000Time round1 = (timePollAckReceived - timePollSent).wrap();
+  DW1000Time reply1 = (timePollAckSent - timePollReceived).wrap();
+  DW1000Time round2 = (timeRangeReceived - timePollAckSent).wrap();
+  DW1000Time reply2 = (timeRangeSent - timePollAckReceived).wrap();
+  DW1000Time tof = (round1 * round2 - reply1 * reply2) / (round1 + round2 + reply1 + reply2);
+  // set tof timestamp
+  timeComputedRange.setTimestamp(tof);
 }
 
 void computeRangeSymmetric() {
-    // symmetric two-way ranging (less computation intense, more error prone on clock drift)
-    DW1000Time tof = ((timePollAckReceived - timePollSent) - (timePollAckSent - timePollReceived) +
-                      (timeRangeReceived - timePollAckSent) - (timeRangeSent - timePollAckReceived)) * 0.25f;
-    // set tof timestamp
-    timeComputedRange.setTimestamp(tof);
+  // symmetric two-way ranging (less computation intense, more error prone on clock drift)
+  DW1000Time tof = ((timePollAckReceived - timePollSent) - (timePollAckSent - timePollReceived) +
+                    (timeRangeReceived - timePollAckSent) - (timeRangeSent - timePollAckReceived)) * 0.25f;
+  // set tof timestamp
+  timeComputedRange.setTimestamp(tof);
 }
 
 /*
@@ -236,90 +258,133 @@ void computeRangeSymmetric() {
  */
 
 void loop() {
-    int32_t curMillis = millis();
-    if (!sentAck && !receivedAck) {
-        // check if inactive
-        if (curMillis - lastActivity > resetPeriod) {
-            //resetInactive();
-            current_tag++;
-            if (current_tag > NUM_TAGS) {
-              current_tag = 1;
-            }
-            expectedMsgId = POLL;
-            transmitPollReq();
-            noteActivity();
-        }
-        return;
+  if (Serial.available() > 0) {
+    int c = Serial.read();
+    if (c == MODE_POLL) {
+      mode_fn = loop_poll;
     }
-
-    // continue on any success confirmation
-    if (sentAck) {
-        sentAck = false;
-        byte msgId = data[0];
-        if (msgId == POLL_REQ) {
-            noteActivity();
-        }
-        else if (msgId == POLL_ACK) {
-            DW1000.getTransmitTimestamp(timePollAckSent);
-            noteActivity();
-        }
+    else if (c == MODE_QUERY) {
+      mode_fn = loop_query;
     }
-    if (receivedAck) {
-        receivedAck = false;
-        // get message and parse
-        DW1000.getData(data, LEN_DATA);
-        byte msgId = data[0];
-        if (msgId != expectedMsgId) {
-            // unexpected message, start over again (except if already POLL)
-            protocolFailed = true;
-        }
-        if (msgId == POLL) {
-            // on POLL we (re-)start, so no protocol failure
-            protocolFailed = false;
-            DW1000.getReceiveTimestamp(timePollReceived);
-            expectedMsgId = RANGE;
-            transmitPollAck();
-            noteActivity();
-        }
-        else if (msgId == RANGE) {
-            DW1000.getReceiveTimestamp(timeRangeReceived);
-            expectedMsgId = POLL;
-            if (!protocolFailed) {
-                timePollSent.setTimestamp(data + 1);
-                timePollAckReceived.setTimestamp(data + 6);
-                timeRangeSent.setTimestamp(data + 11);
-                // (re-)compute range as two-way ranging is done
-                computeRangeAsymmetric(); // CHOSEN RANGING ALGORITHM
-                transmitRangeReport(timeComputedRange.getAsMicroSeconds());
-                float distance = timeComputedRange.getAsMeters();
-                Serial.print("Tag: "); Serial.print(current_tag);
-                Serial.print("\t Range: "); Serial.print(distance); Serial.print(" m");
-                Serial.print("\t RX power: "); Serial.print(DW1000.getReceivePower()); Serial.print(" dBm");
-                Serial.print("\t Sampling: "); Serial.print(samplingRate); Serial.println(" Hz");
-                //Serial.print("FP power is [dBm]: "); Serial.print(DW1000.getFirstPathPower());
-                //Serial.print("RX power is [dBm]: "); Serial.println(DW1000.getReceivePower());
-                //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
-                // update sampling rate (each second)
-                successRangingCount++;
-                if (curMillis - rangingCountPeriod > 1000) {
-                    samplingRate = (1000.0f * successRangingCount) / (curMillis - rangingCountPeriod);
-                    rangingCountPeriod = curMillis;
-                    successRangingCount = 0;
-                }
-            }
-            else {
-                transmitRangeFailed();
-            }
-
-            // Request to poll the next tag
-            current_tag++;
-            if (current_tag > NUM_TAGS) {
-              current_tag = 1;
-            }
-            expectedMsgId = POLL;
-            transmitPollReq();
-            noteActivity();
-        }
+    else if (c == MODE_SAVE) {
+      loop_save();
     }
+    else if (c == MODE_INFO) {
+      loop_info();
+    }
+  }
+  mode_fn();
 }
 
+void loop_poll() {
+  int32_t curMillis = millis();
+  if (!sentAck && !receivedAck) {
+    // check if inactive
+    if (curMillis - lastActivity > resetPeriod) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      expectedMsgId = POLL;
+      transmitPollReq();
+      noteActivity();
+    }
+    return;
+  }
+
+  // continue on any success confirmation
+  if (sentAck) {
+    sentAck = false;
+    byte msgId = data[0];
+    if (msgId == POLL_REQ) {
+      noteActivity();
+    }
+    else if (msgId == POLL_ACK) {
+      DW1000.getTransmitTimestamp(timePollAckSent);
+      noteActivity();
+    }
+  }
+  if (receivedAck) {
+    receivedAck = false;
+    // get message and parse
+    DW1000.getData(data, LEN_DATA);
+    byte msgId = data[0];
+    if (msgId != expectedMsgId) {
+      // unexpected message, start over again (except if already POLL)
+      protocolFailed = true;
+    }
+    if (msgId == POLL) {
+      // on POLL we (re-)start, so no protocol failure
+      protocolFailed = false;
+      DW1000.getReceiveTimestamp(timePollReceived);
+      expectedMsgId = RANGE;
+      transmitPollAck();
+      noteActivity();
+    }
+    else if (msgId == RANGE) {
+      DW1000.getReceiveTimestamp(timeRangeReceived);
+      expectedMsgId = POLL;
+      if (!protocolFailed) {
+        timePollSent.setTimestamp(data + 1);
+        timePollAckReceived.setTimestamp(data + 6);
+        timeRangeSent.setTimestamp(data + 11);
+        // (re-)compute range as two-way ranging is done
+        computeRangeAsymmetric(); // CHOSEN RANGING ALGORITHM
+        transmitRangeReport(timeComputedRange.getAsMicroSeconds());
+        float distance = timeComputedRange.getAsMeters();
+        Serial.print("Tag: "); Serial.print(current_tag);
+        Serial.print("\t Range: "); Serial.print(distance); Serial.print(" m");
+        Serial.print("\t RX power: "); Serial.print(DW1000.getReceivePower()); Serial.print(" dBm");
+        Serial.print("\t Sampling: "); Serial.print(samplingRate); Serial.println(" Hz");
+        //Serial.print("FP power is [dBm]: "); Serial.print(DW1000.getFirstPathPower());
+        //Serial.print("RX power is [dBm]: "); Serial.println(DW1000.getReceivePower());
+        //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
+        // update sampling rate (each second)
+        successRangingCount++;
+        if (curMillis - rangingCountPeriod > 1000) {
+          samplingRate = (1000.0f * successRangingCount) / (curMillis - rangingCountPeriod);
+          rangingCountPeriod = curMillis;
+          successRangingCount = 0;
+        }
+      }
+      else {
+        transmitRangeFailed();
+      }
+
+      // Request to poll the next tag
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      expectedMsgId = POLL;
+      transmitPollReq();
+      noteActivity();
+    }
+  }
+}
+
+void loop_query() {
+  // TODO
+  Serial.println(F("TODO query"));
+}
+
+void loop_save() {
+  // TODO
+  Serial.println(F("TODO save"));
+}
+
+void loop_info() {
+  Serial.println(F("### DW1000 Arduino Ranging Anchor ###"));
+
+  // Information
+  char msg[128];
+  DW1000.getPrintableDeviceIdentifier(msg);
+  Serial.print(F("Device ID: ")); Serial.println(msg);
+  DW1000.getPrintableExtendedUniqueIdentifier(msg);
+  Serial.print(F("Unique ID: ")); Serial.println(msg);
+  DW1000.getPrintableNetworkIdAndShortAddress(msg);
+  Serial.print(F("Network ID & Device Address: ")); Serial.println(msg);
+  DW1000.getPrintableDeviceMode(msg);
+  Serial.print(F("Device mode: ")); Serial.println(msg);
+  Serial.print("Ranging ID: "); Serial.println(DWID);
+}
