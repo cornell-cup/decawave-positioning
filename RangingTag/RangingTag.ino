@@ -54,6 +54,7 @@
 #ifndef NUM_TAGS
 #   define    NUM_TAGS 3  // Number of active tags
 #endif
+#define       MAX_RANGE 100 // Likely maximum possible range
 
 // Connection pins
 #define PIN_RST 9  // reset pin

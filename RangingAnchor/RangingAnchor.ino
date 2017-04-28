@@ -51,6 +51,7 @@
 #ifndef NUM_TAGS
 #   define    NUM_TAGS 3  // Number of active tags
 #endif
+#define       MAX_RANGE 100 // Likely maximum possible range
 
 // Connection pins
 #define PIN_RST 9  // reset pin
@@ -342,7 +343,7 @@ void loop_poll() {
         Serial.print("\t RX power: "); Serial.print(DW1000.getReceivePower()); Serial.print(" dBm");
         Serial.print("\t Sampling: "); Serial.print(samplingRate); Serial.println(" Hz");
         //Serial.print("FP power is [dBm]: "); Serial.print(DW1000.getFirstPathPower());
-        //Serial.print("RX power is [dBm]: "); Serial.println(DW1000.getReceivePower());
+        //Serial.print("RX power is [dBm]: "); Serial.print(DW1000.getReceivePower());
         //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
         // update sampling rate (each second)
         successRangingCount++;
