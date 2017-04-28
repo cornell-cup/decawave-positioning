@@ -191,6 +191,42 @@ void receiver() {
   DW1000.startReceive();
 }
 
+/*
+ * RANGING ALGORITHMS
+ * ------------------
+ * Either of the below functions can be used for range computation (see line "CHOSEN
+ * RANGING ALGORITHM" in the code).
+ * - Asymmetric is more computation intense but least error prone
+ * - Symmetric is less computation intense but more error prone to clock drifts
+ *
+ * The anchors and tags of this reference example use the same reply delay times, hence
+ * are capable of symmetric ranging (and of asymmetric ranging anyway).
+ */
+
+void computeRangeAsymmetric() {
+  // asymmetric two-way ranging (more computation intense, less error prone)
+  DW1000Time round1 = (timePollAckReceived - timePollSent).wrap();
+  DW1000Time reply1 = (timePollAckSent - timePollReceived).wrap();
+  DW1000Time round2 = (timeRangeReceived - timePollAckSent).wrap();
+  DW1000Time reply2 = (timeRangeSent - timePollAckReceived).wrap();
+  DW1000Time tof = (round1 * round2 - reply1 * reply2) / (round1 + round2 + reply1 + reply2);
+  // set tof timestamp
+  timeComputedRange.setTimestamp(tof);
+}
+
+void computeRangeSymmetric() {
+  // symmetric two-way ranging (less computation intense, more error prone on clock drift)
+  DW1000Time tof = ((timePollAckReceived - timePollSent) - (timePollAckSent - timePollReceived) +
+                    (timeRangeReceived - timePollAckSent) - (timeRangeSent - timePollAckReceived)) * 0.25f;
+  // set tof timestamp
+  timeComputedRange.setTimestamp(tof);
+}
+
+/*
+ * END RANGING ALGORITHMS
+ * ----------------------
+ */
+
 void loop() {
   if (Serial.available() > 0) {
     int c = Serial.read();
