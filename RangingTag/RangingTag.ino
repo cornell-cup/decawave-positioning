@@ -245,6 +245,9 @@ void loop() {
     else if (c == MODE_INFO) {
       loop_info();
     }
+    sentAck = false;
+    receivedAck = false;
+    lastActivity = 0;
   }
   mode_fn();
 }
