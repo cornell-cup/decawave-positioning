@@ -88,8 +88,10 @@ void loop_info();
 #define POLL_ACK      1
 #define RANGE         2
 #define RANGE_REPORT  3
-#define POLL_REQ      250
+#define POLL_REQ      4
 #define RANGE_FAILED  255
+#define QUERY         20
+#define QUERY_DATA    21
 /******** END ENUMS ********/
 
 // Current mode function pointer
@@ -126,8 +128,10 @@ uint32_t rangingCountPeriod = 0;
 float samplingRate = 0;
 
 // Detected distances to other tags
-float detect_dists[NUM_TAGS + 1] = {0.f};
-int detect_samples[NUM_TAGS + 1] = {0};
+struct {
+  float distances[NUM_TAGS + 1];
+  int samples[NUM_TAGS + 1];
+} tags = { { 0 }, { 0 } };
 
 // The current tag being polled
 uint8_t current_tag = 1;
@@ -269,6 +273,23 @@ void transmitRangeFailed() {
 
 /******** END ANCHOR POLL FUNCTIONS ********/
 
+/******** QUERY FUNCTIONS ********/
+
+// Send distance data in response to a query
+void transmitQueryData() {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  byte * query_data = (byte *) (&tags);
+  query_data[0] = QUERY_DATA;
+  DW1000.setData(query_data, sizeof(tags));
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent query data");
+#endif
+}
+
+/******** END QUERY FUNCTIONS ********/
+
 // Receive a new message
 void receiver() {
   DW1000.newReceive();
@@ -331,6 +352,7 @@ void loop() {
       loop_save();
     }
     else if (c == MODE_SEND) {
+      expectedMsgId = QUERY;
       mode_fn = loop_send;
     }
     else if (c == MODE_INFO) {
@@ -344,10 +366,12 @@ void loop() {
 }
 
 void loop_poll() {
+  int32_t curMillis = millis();
   if (!sentAck && !receivedAck) {
     // check if inactive
-    if (millis() - lastActivity > resetPeriod) {
+    if (curMillis - lastActivity > resetPeriod) {
       expectedMsgId = POLL_REQ;
+      protocolFailed = false;
       receiver();
       noteActivity();
 #ifdef DEBUG
@@ -432,6 +456,7 @@ void loop_detect() {
         current_tag = 1;
       }
       expectedMsgId = POLL;
+      protocolFailed = false;
       transmitPollReq();
       noteActivity();
     }
@@ -487,8 +512,8 @@ void loop_detect() {
         //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
         // Save the distance if it looks reasonable
         if (distance > 0 && distance < MAX_RANGE) {
-          detect_dists[current_tag] += distance;
-          detect_samples[current_tag]++;
+          tags.distances[current_tag] += distance;
+          tags.samples[current_tag]++;
         }
         // update sampling rate (each second)
         successRangingCount++;
@@ -550,8 +575,8 @@ void loop_load() {
     EEPROM.get(offset, dist);
     offset += sizeof(float);
     EEPROM.get(offset, sample);
-    detect_dists[i] = dist;
-    detect_samples[i] = sample;
+    tags.distances[i] = dist;
+    tags.samples[i] = sample;
   }
   Serial.print("Loaded ");
   Serial.print(count);
@@ -564,9 +589,9 @@ void loop_save() {
   EEPROM.put(sizeof(int), (int) NUM_TAGS);
   for (int i = 1; i <= NUM_TAGS; i++) {
     int offset = width * i;
-    EEPROM.put(offset, detect_dists[i]);
+    EEPROM.put(offset, tags.distances[i]);
     offset += sizeof(float);
-    EEPROM.put(offset, detect_samples[i]);
+    EEPROM.put(offset, tags.samples[i]);
   }
   Serial.print("Saved ");
   Serial.print(NUM_TAGS);
@@ -574,8 +599,39 @@ void loop_save() {
 }
 
 void loop_send() {
-  // TODO
-  Serial.println(F("TODO send"));
+  int32_t curMillis = millis();
+  if (!sentAck && !receivedAck) {
+    // check if inactive
+    if (curMillis - lastActivity > resetPeriod) {
+      receiver();
+      noteActivity();
+#ifdef DEBUG
+      Serial.println(F("Waiting for query"));
+#endif
+    }
+    return;
+  }
+
+  // Continue on any success confirmation
+  if (sentAck) {
+    sentAck = false;
+
+    byte msgId = data[0];
+    if (msgId == QUERY_DATA) {
+      noteActivity();
+    }
+  }
+
+  if (receivedAck) {
+    receivedAck = false;
+
+    DW1000.getData(data, LEN_DATA);
+    byte msgId = data[0];
+    if (msgId == QUERY) {
+      transmitQueryData();
+      noteActivity();
+    }
+  }
 }
 
 void loop_info() {
@@ -596,10 +652,10 @@ void loop_info() {
 
   Serial.println("Distances:");
   for (int i = 0; i <= NUM_TAGS; i++) {
-    Serial.print(detect_samples[i]);
+    Serial.print(tags.samples[i]);
     Serial.print("\t");
-    Serial.print(detect_dists[i]);
+    Serial.print(tags.distances[i], 8);
     Serial.print("\t");
-    Serial.println(detect_dists[i] / detect_samples[i]);
+    Serial.println(tags.distances[i] / tags.samples[i], 8);
   }
 }

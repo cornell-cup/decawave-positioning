@@ -63,12 +63,10 @@
 // Modes available
 #define MODE_POLL     'P' // Poll distances
 #define MODE_QUERY    'Q' // Query distances to other tags
-#define MODE_SAVE     'S' // Save distances to other tags to EEPROM
 #define MODE_INFO     'I' // Display info
 
 void loop_poll();
 void loop_query();
-void loop_save();
 void loop_info();
 
 // Messages used in the ranging protocol
@@ -76,8 +74,10 @@ void loop_info();
 #define POLL_ACK      1
 #define RANGE         2
 #define RANGE_REPORT  3
-#define POLL_REQ      250
+#define POLL_REQ      4
 #define RANGE_FAILED  255
+#define QUERY         20
+#define QUERY_DATA    21
 /******** END ENUMS ********/
 
 // Current mode function pointer
@@ -112,6 +112,12 @@ uint16_t replyDelayTimeUS = 3000;
 uint16_t successRangingCount = 0;
 uint32_t rangingCountPeriod = 0;
 float samplingRate = 0;
+
+// Detected distances to other tags
+struct {
+  float distances[NUM_TAGS + 1];
+  int samples[NUM_TAGS + 1];
+} tags = { { 0 }, { 0 } };
 
 // The current tag begin polled
 uint8_t current_tag = 1;
@@ -215,6 +221,18 @@ void transmitRangeFailed() {
 #endif
 }
 
+// Send a query for distance data
+void transmitQuery() {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = QUERY;
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Send query");
+#endif
+}
+
 // Receive a new message
 void receiver() {
   DW1000.newReceive();
@@ -267,10 +285,8 @@ void loop() {
       mode_fn = loop_poll;
     }
     else if (c == MODE_QUERY) {
+      expectedMsgId = QUERY_DATA;
       mode_fn = loop_query;
-    }
-    else if (c == MODE_SAVE) {
-      loop_save();
     }
     else if (c == MODE_INFO) {
       loop_info();
@@ -292,6 +308,7 @@ void loop_poll() {
         current_tag = 1;
       }
       expectedMsgId = POLL;
+      protocolFailed = false;
       transmitPollReq();
       noteActivity();
     }
@@ -370,13 +387,49 @@ void loop_poll() {
 }
 
 void loop_query() {
-  // TODO
-  Serial.println(F("TODO query"));
-}
+  int32_t curMillis = millis();
+  if (!sentAck && !receivedAck) {
+    // check if inactive
+    if (curMillis - lastActivity > resetPeriod) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      transmitQuery();
+      noteActivity();
+    }
+    return;
+  }
 
-void loop_save() {
-  // TODO
-  Serial.println(F("TODO save"));
+  // Continue on any success confirmation
+  if (sentAck) {
+    sentAck = false;
+
+    byte msgId = data[0];
+    if (msgId == QUERY) {
+      noteActivity();
+    }
+  }
+
+  if (receivedAck) {
+    receivedAck = false;
+
+    DW1000.getData((byte *) &tags, sizeof(tags));
+    byte msgId = data[0];
+    if (msgId == QUERY_DATA) {
+      for (int i = 1; i <= NUM_TAGS; i++) {
+        Serial.print(current_tag);
+        Serial.print(",");
+        Serial.print(i);
+        Serial.print(",");
+        Serial.print(tags.samples[i]);
+        Serial.print(",");
+        Serial.print(tags.distances[i], 8);
+        Serial.println();
+      }
+      noteActivity();
+    }
+  }
 }
 
 void loop_info() {
