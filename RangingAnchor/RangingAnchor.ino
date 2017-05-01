@@ -356,6 +356,10 @@ void loop_poll() {
         computeRangeAsymmetric(); // CHOSEN RANGING ALGORITHM
         transmitRangeReport(timeComputedRange.getAsMicroSeconds());
         float distance = timeComputedRange.getAsMeters();
+        Serial.print(MODE_POLL); Serial.print(",");
+        Serial.print(current_tag); Serial.print(",");
+        Serial.print(distance, 8); Serial.print("\n");
+        /*
         Serial.print("Tag: "); Serial.print(current_tag);
         Serial.print("\t Range: "); Serial.print(distance); Serial.print(" m");
         Serial.print("\t RX power: "); Serial.print(DW1000.getReceivePower()); Serial.print(" dBm");
@@ -370,6 +374,7 @@ void loop_poll() {
           rangingCountPeriod = curMillis;
           successRangingCount = 0;
         }
+        */
       }
       else {
         transmitRangeFailed();
@@ -419,14 +424,11 @@ void loop_query() {
     byte msgId = ((byte *) &tags)[0];
     if (msgId == QUERY_DATA) {
       for (int i = 1; i <= NUM_TAGS; i++) {
-        Serial.print(current_tag);
-        Serial.print(",");
-        Serial.print(i);
-        Serial.print(",");
-        Serial.print(tags.samples[i]);
-        Serial.print(",");
-        Serial.print(tags.distances[i], 8);
-        Serial.println();
+        Serial.print(MODE_QUERY); Serial.print(",");
+        Serial.print(current_tag); Serial.print(",");
+        Serial.print(i); Serial.print(",");
+        Serial.print(tags.samples[i]); Serial.print(",");
+        Serial.print(tags.distances[i], 8); Serial.print("\n");
       }
       noteActivity();
     }
