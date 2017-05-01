@@ -71,6 +71,7 @@
 // Modes available
 #define MODE_POLL     'P' // Listen for ranging requests
 #define MODE_DETECT   'D' // Act as an anchor and detect distances to other tags
+#define MODE_CLEAR    'C' // Clear saved distances
 #define MODE_LOAD     'L' // Load distances from EEPROM
 #define MODE_SAVE     'S' // Save detected distances to other tags to EEPROM
 #define MODE_SEND     'N' // Listen for requests for distances
@@ -78,6 +79,7 @@
 
 void loop_poll();
 void loop_detect();
+void loop_clear();
 void loop_load();
 void loop_save();
 void loop_send();
@@ -190,6 +192,8 @@ void transmitPoll() {
   DW1000.setDefaults();
   data[0] = POLL;
   DW1000.setData(data, LEN_DATA);
+  DW1000Time deltaTime = DW1000Time(replyDelayTimeUS, DW1000Time::MICROSECONDS);
+  DW1000.setDelay(deltaTime);
   DW1000.startTransmit();
 #ifdef DEBUG
   Serial.println("Sent poll");
@@ -338,12 +342,15 @@ void loop() {
   if (Serial.available() > 0) {
     int c = Serial.read();
     if (c == MODE_POLL) {
-      expectedMsgId = POLL;
+      expectedMsgId = POLL_REQ;
       mode_fn = loop_poll;
     }
     else if (c == MODE_DETECT) {
-      expectedMsgId = POLL_REQ;
+      expectedMsgId = POLL;
       mode_fn = loop_detect;
+    }
+    else if (c == MODE_CLEAR) {
+      loop_clear();
     }
     else if (c == MODE_LOAD) {
       loop_load();
@@ -418,6 +425,11 @@ void loop_poll() {
         transmitPoll();
         noteActivity();
       }
+      else {
+        expectedMsgId = POLL_REQ;
+        receiver();
+        noteActivity();
+      }
     }
     else if (msgId == POLL_ACK) {
       DW1000.getReceiveTimestamp(timePollAckReceived);
@@ -468,6 +480,7 @@ void loop_detect() {
     sentAck = false;
     byte msgId = data[0];
     if (msgId == POLL_REQ) {
+      receiver();
       noteActivity();
     }
     else if (msgId == POLL_ACK) {
@@ -545,6 +558,13 @@ void loop_detect() {
   }
 }
 
+void loop_clear() {
+  for (int i = 0; i <= NUM_TAGS; i++) {
+    tags.distances[i] = 0.f;
+    tags.samples[i] = 0;
+  }
+}
+
 void loop_load() {
   int width = sizeof(float) + sizeof(int);
   int magic = 0;
@@ -553,8 +573,6 @@ void loop_load() {
   EEPROM.get(sizeof(int), count);
   if (magic != EEPROM_MAGIC_INT) {
     Serial.println("Error: Did not find magic int in EEPROM");
-    Serial.println(magic);
-    Serial.println(EEPROM_MAGIC_INT);
     return;
   }
   if (count != NUM_TAGS) {
@@ -568,7 +586,7 @@ void loop_load() {
     }
   }
 
-  for (int i = 1; i <= count && i <= NUM_TAGS; i++) {
+  for (int i = 1; i <= count; i++) {
     int offset = width * i;
     float dist;
     int sample;
@@ -602,7 +620,7 @@ void loop_send() {
   int32_t curMillis = millis();
   if (!sentAck && !receivedAck) {
     // check if inactive
-    if (curMillis - lastActivity > resetPeriod) {
+    if (curMillis - lastActivity > resetPeriod * 4) {
       receiver();
       noteActivity();
 #ifdef DEBUG
@@ -628,9 +646,21 @@ void loop_send() {
     DW1000.getData(data, LEN_DATA);
     byte msgId = data[0];
     if (msgId == QUERY) {
-      transmitQueryData();
-      noteActivity();
+      if (data[1] == DWID) { // Make sure this query is directed to us
+        transmitQueryData();
+        noteActivity();
+      }
+#ifdef DEBUG
+      else {
+        Serial.print("Query not for us #"); Serial.println(data[1]);
+      }
+#endif
     }
+#ifdef DEBUG
+    else {
+      Serial.println("Received wrong message");
+    }
+#endif
   }
 }
 

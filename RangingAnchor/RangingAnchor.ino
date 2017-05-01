@@ -226,6 +226,7 @@ void transmitQuery() {
   DW1000.newTransmit();
   DW1000.setDefaults();
   data[0] = QUERY;
+  data[1] = current_tag;
   DW1000.setData(data, LEN_DATA);
   DW1000.startTransmit();
 #ifdef DEBUG
@@ -390,7 +391,7 @@ void loop_query() {
   int32_t curMillis = millis();
   if (!sentAck && !receivedAck) {
     // check if inactive
-    if (curMillis - lastActivity > resetPeriod) {
+    if (curMillis - lastActivity > resetPeriod * 4) {
       current_tag++;
       if (current_tag > NUM_TAGS) {
         current_tag = 1;
@@ -415,7 +416,7 @@ void loop_query() {
     receivedAck = false;
 
     DW1000.getData((byte *) &tags, sizeof(tags));
-    byte msgId = data[0];
+    byte msgId = ((byte *) &tags)[0];
     if (msgId == QUERY_DATA) {
       for (int i = 1; i <= NUM_TAGS; i++) {
         Serial.print(current_tag);
@@ -429,6 +430,11 @@ void loop_query() {
       }
       noteActivity();
     }
+#ifdef DEBUG
+    else {
+      Serial.println("Received wrong message");
+    }
+#endif
   }
 }
 
