@@ -18,5 +18,19 @@
     <ClCompile Include="DecawaveLocalization.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="GaussNewton.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Localizer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="GaussNewton.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Localizer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
