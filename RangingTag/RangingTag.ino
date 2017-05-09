@@ -94,6 +94,7 @@ void loop_info();
 #define RANGE_FAILED  255
 #define QUERY         20
 #define QUERY_DATA    21
+#define CHANGE_MODE   30
 /******** END ENUMS ********/
 
 // Current mode function pointer
@@ -120,7 +121,7 @@ DW1000Time timeComputedRange;
 byte data[LEN_DATA];
 // watchdog and reset period
 uint32_t lastActivity;
-uint32_t resetPeriod = 250;
+uint32_t resetPeriod = 100;
 // reply times (same on both sides for symm. ranging)
 uint16_t replyDelayTimeUS = 3000;
 
@@ -137,6 +138,7 @@ struct {
 
 // The current tag being polled
 uint8_t current_tag = 1;
+char change_mode = 0;
 
 void setup() {
   // Serial
@@ -340,34 +342,37 @@ void computeRangeSymmetric() {
 
 void loop() {
   if (Serial.available() > 0) {
-    int c = Serial.read();
-    if (c == MODE_POLL) {
+    change_mode = Serial.read();
+  }
+  if (change_mode > 0) {
+    if (change_mode == MODE_POLL) {
       expectedMsgId = POLL_REQ;
       mode_fn = loop_poll;
     }
-    else if (c == MODE_DETECT) {
+    else if (change_mode == MODE_DETECT) {
       expectedMsgId = POLL;
       mode_fn = loop_detect;
     }
-    else if (c == MODE_CLEAR) {
+    else if (change_mode == MODE_CLEAR) {
       loop_clear();
     }
-    else if (c == MODE_LOAD) {
+    else if (change_mode == MODE_LOAD) {
       loop_load();
     }
-    else if (c == MODE_SAVE) {
+    else if (change_mode == MODE_SAVE) {
       loop_save();
     }
-    else if (c == MODE_SEND) {
+    else if (change_mode == MODE_SEND) {
       expectedMsgId = QUERY;
       mode_fn = loop_send;
     }
-    else if (c == MODE_INFO) {
+    else if (change_mode == MODE_INFO) {
       loop_info();
     }
     sentAck = false;
     receivedAck = false;
     lastActivity = 0;
+    change_mode = 0;
   }
   mode_fn();
 }
@@ -405,6 +410,15 @@ void loop_poll() {
     // get message and parse
     DW1000.getData(data, LEN_DATA);
     byte msgId = data[0];
+    if (msgId == CHANGE_MODE) {
+      if (data[1] == DWID) {
+        change_mode = data[2];
+#ifdef DEBUG
+        Serial.print(F("Changing mode to ")); Serial.println(change_mode);
+#endif
+        return;
+      }
+    }
     if (msgId != expectedMsgId) {
       // unexpected message, start over again
 #ifdef DEBUG
@@ -493,6 +507,15 @@ void loop_detect() {
     // get message and parse
     DW1000.getData(data, LEN_DATA);
     byte msgId = data[0];
+    if (msgId == CHANGE_MODE) {
+      if (data[1] == DWID) {
+        change_mode = data[2];
+#ifdef DEBUG
+        Serial.print(F("Changing mode to ")); Serial.println(change_mode);
+#endif
+        return;
+      }
+    }
     if (msgId != expectedMsgId) {
       // unexpected message, start over again (except if already POLL)
       protocolFailed = true;

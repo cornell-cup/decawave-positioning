@@ -64,9 +64,13 @@
 #define MODE_POLL     'P' // Poll distances
 #define MODE_QUERY    'Q' // Query distances to other tags
 #define MODE_INFO     'I' // Display info
+#define MODE_CHANGEP  'C' // Change tags to poll mode
+#define MODE_CHANGEN  'N' // Change tags to send mode
 
 void loop_poll();
 void loop_query();
+void loop_changep();
+void loop_changen();
 void loop_info();
 
 // Messages used in the ranging protocol
@@ -78,6 +82,7 @@ void loop_info();
 #define RANGE_FAILED  255
 #define QUERY         20
 #define QUERY_DATA    21
+#define CHANGE_MODE   30
 /******** END ENUMS ********/
 
 // Current mode function pointer
@@ -104,7 +109,7 @@ DW1000Time timeComputedRange;
 byte data[LEN_DATA];
 // watchdog and reset period
 uint32_t lastActivity;
-uint32_t resetPeriod = 250;
+uint32_t resetPeriod = 100;
 // reply times (same on both sides for symm. ranging)
 uint16_t replyDelayTimeUS = 3000;
 
@@ -234,6 +239,20 @@ void transmitQuery() {
 #endif
 }
 
+// Send a request to change modes
+void transmitChangeMode(char mode) {
+  DW1000.newTransmit();
+  DW1000.setDefaults();
+  data[0] = CHANGE_MODE;
+  data[1] = current_tag;
+  data[2] = mode;
+  DW1000.setData(data, LEN_DATA);
+  DW1000.startTransmit();
+#ifdef DEBUG
+  Serial.println("Sent change mode");
+#endif
+}
+
 // Receive a new message
 void receiver() {
   DW1000.newReceive();
@@ -288,6 +307,12 @@ void loop() {
     else if (c == MODE_QUERY) {
       expectedMsgId = QUERY_DATA;
       mode_fn = loop_query;
+    }
+    else if (c == MODE_CHANGEP) {
+      mode_fn = loop_changep;
+    }
+    else if (c == MODE_CHANGEN) {
+      mode_fn = loop_changen;
     }
     else if (c == MODE_INFO) {
       loop_info();
@@ -359,22 +384,6 @@ void loop_poll() {
         Serial.print(MODE_POLL); Serial.print(",");
         Serial.print(current_tag); Serial.print(",");
         Serial.print(distance, 8); Serial.print("\n");
-        /*
-        Serial.print("Tag: "); Serial.print(current_tag);
-        Serial.print("\t Range: "); Serial.print(distance); Serial.print(" m");
-        Serial.print("\t RX power: "); Serial.print(DW1000.getReceivePower()); Serial.print(" dBm");
-        Serial.print("\t Sampling: "); Serial.print(samplingRate); Serial.println(" Hz");
-        //Serial.print("FP power is [dBm]: "); Serial.print(DW1000.getFirstPathPower());
-        //Serial.print("RX power is [dBm]: "); Serial.print(DW1000.getReceivePower());
-        //Serial.print("Receive quality: "); Serial.println(DW1000.getReceiveQuality());
-        // update sampling rate (each second)
-        successRangingCount++;
-        if (curMillis - rangingCountPeriod > 1000) {
-          samplingRate = (1000.0f * successRangingCount) / (curMillis - rangingCountPeriod);
-          rangingCountPeriod = curMillis;
-          successRangingCount = 0;
-        }
-        */
       }
       else {
         transmitRangeFailed();
@@ -437,6 +446,68 @@ void loop_query() {
       Serial.println("Received wrong message");
     }
 #endif
+  }
+}
+
+void loop_changep() {
+  int32_t curMillis = millis();
+  if (!sentAck && !receivedAck) {
+    // check if inactive
+    if (curMillis - lastActivity > resetPeriod) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      transmitChangeMode('P');
+      noteActivity();
+    }
+    return;
+  }
+
+  // Continue on any success confirmation
+  if (sentAck) {
+    sentAck = false;
+
+    byte msgId = data[0];
+    if (msgId == QUERY) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      transmitChangeMode('P');
+      noteActivity();
+    }
+  }
+}
+
+void loop_changen() {
+  int32_t curMillis = millis();
+  if (!sentAck && !receivedAck) {
+    // check if inactive
+    if (curMillis - lastActivity > resetPeriod) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      transmitChangeMode('N');
+      noteActivity();
+    }
+    return;
+  }
+
+  // Continue on any success confirmation
+  if (sentAck) {
+    sentAck = false;
+
+    byte msgId = data[0];
+    if (msgId == QUERY) {
+      current_tag++;
+      if (current_tag > NUM_TAGS) {
+        current_tag = 1;
+      }
+      transmitChangeMode('N');
+      noteActivity();
+    }
   }
 }
 
