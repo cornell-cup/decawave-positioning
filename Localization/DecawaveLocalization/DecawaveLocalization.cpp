@@ -19,6 +19,7 @@ using namespace std::chrono;
 constexpr int NUM_RECEIVERS = 3;
 constexpr float r2z = 0.8f;
 constexpr float receiverz = 1.8288f;
+constexpr float calibration_offset = -0.7f;
 
 void setv(vector<float>& v, float x, float y, float z) {
 	v[0] = x;
@@ -44,16 +45,16 @@ void generateGraph(vector<vector<float>>& dists, vector<vector<float>>& receiver
 	positions[0] = origin;
 
 	// Assume the second tag is in a direction
-	Eigen::Vector3f direction(7.8034f, 4.8756f, receiverz);
+	Eigen::Vector3f direction(7.8034f, 4.8756f, 0);
 	direction.normalize();
 	positions[1] = positions[0] + direction * dists[0][1];
 
 	// Assume the third tag is in the plane in the direction of the given vector
-	Eigen::Vector3f plane_normal(0.f, 0.f, 1.f);
+	Eigen::Vector3f plane_normal(1.f, -1.f, 0.f);
 	plane_normal.normalize();
 	float semiperimeter = (dists[0][1] + dists[1][2] + dists[0][2]) * 0.5f;
 	float area = sqrt(semiperimeter * (semiperimeter - dists[0][1])
-		* (semiperimeter - dists[0][2]) * (semiperimeter - dists[0][2]));
+		* (semiperimeter - dists[0][2]) * (semiperimeter - dists[1][2]));
 	float height = 2.f * area / dists[0][1];
 	float length = sqrt(dists[0][2] * dists[0][2] - height * height);
 	Eigen::Vector3f vec01 = positions[1] - positions[0];
@@ -104,7 +105,7 @@ int main(int argc, char ** argv)
 
 	while (mode != VK_ESCAPE) {
 		auto ctime = std::chrono::steady_clock::now();
-		if (std::chrono::duration_cast<std::chrono::milliseconds>(ctime - lastkp).count() > 1000) {
+		if (std::chrono::duration_cast<std::chrono::milliseconds>(ctime - lastkp).count() > 250) {
 			for (int i = 0; i < sizeof(modes); i++) {
 				if ((GetAsyncKeyState(modes[i]) & 0x8000) != 0) {
 					mode = modes[i];
@@ -130,13 +131,6 @@ int main(int argc, char ** argv)
 			conn.write(buffer, 1);
 			mode = ' ';
 			break;
-			/*
-			high_resolution_clock::time_point t1 = high_resolution_clock::now();
-			x = local.localize(x, dist);
-			high_resolution_clock::time_point t2 = high_resolution_clock::now();
-			auto duration = duration_cast<microseconds>(t2 - t1).count();
-			printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
-			*/
 		case 'L': // Localize
 			generateGraph(receiver_graph, receivers);
 			local = Localizer(receivers, r2z);
@@ -150,14 +144,21 @@ int main(int argc, char ** argv)
 		size_t index;
 		while ((index = data.find("\n")) != string::npos) {
 			string result = data.substr(0, index);
-			printf("%s\n", result.c_str());
+			printf("%s\t", result.c_str());
 			if (result[0] == 'P') { // Poll result
 				int tag;
 				float distance;
 				int read = sscanf_s(result.c_str(), "P,%d,%f", &tag, &distance);
 				if (read == 2) {
 					tag--;
+					distance += calibration_offset;
 				}
+				dist[tag] = distance;
+				high_resolution_clock::time_point t1 = high_resolution_clock::now();
+				x = local.localize(x, dist);
+				high_resolution_clock::time_point t2 = high_resolution_clock::now();
+				auto duration = duration_cast<microseconds>(t2 - t1).count();
+				printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
 			}
 			else if (result[0] == 'Q') { // Query distance result
 				int tagFrom, tagTo, samples;
@@ -166,8 +167,12 @@ int main(int argc, char ** argv)
 				if (read == 4 && samples > 0) {
 					tagFrom--;
 					tagTo--;
-					receiver_graph[tagFrom][tagTo] = total_distance / (float)samples;
+					receiver_graph[tagFrom][tagTo] = total_distance / (float)samples + calibration_offset;
 				}
+				printf("\n");
+			}
+			else {
+				printf("\n");
 			}
 			data.erase(0, index + 1);
 		}
