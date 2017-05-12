@@ -31,20 +31,20 @@ void generateGraph(vector<vector<float>>& dists, vector<vector<float>>& receiver
 	// Average values in the receiver graph
 	for (int i = 0; i < NUM_RECEIVERS; i++) {
 		for (int j = i + 1; j < NUM_RECEIVERS; j++) {
-			float average = (dists[i][j] + dists[j][i]) * 0.5;
+			float average = (dists[i][j] + dists[j][i]) * 0.5f;
 			dists[i][j] = average;
 			dists[j][i] = average;
 		}
 	}
 	
 	// Receiver positions
-	vector<Eigen::Vector3f> positions;
+	vector<Eigen::Vector3f> positions(3);
 	// Assume the first receiver is at a certain point
 	Eigen::Vector3f origin(0, 0, receiverz);
 	positions[0] = origin;
 
 	// Assume the second tag is in a direction
-	Eigen::Vector3f direction(7.8034, 4.8756, receiverz);
+	Eigen::Vector3f direction(7.8034f, 4.8756f, receiverz);
 	direction.normalize();
 	positions[1] = positions[0] + direction * dists[0][1];
 
@@ -54,7 +54,7 @@ void generateGraph(vector<vector<float>>& dists, vector<vector<float>>& receiver
 	float semiperimeter = (dists[0][1] + dists[1][2] + dists[0][2]) * 0.5f;
 	float area = sqrt(semiperimeter * (semiperimeter - dists[0][1])
 		* (semiperimeter - dists[0][2]) * (semiperimeter - dists[0][2]));
-	float height = 2.0 * area / dists[0][1];
+	float height = 2.f * area / dists[0][1];
 	float length = sqrt(dists[0][2] * dists[0][2] - height * height);
 	Eigen::Vector3f vec01 = positions[1] - positions[0];
 	vec01.normalize();
@@ -75,10 +75,12 @@ void generateGraph(vector<vector<float>>& dists, vector<vector<float>>& receiver
 int main(int argc, char ** argv)
 {
 	if (argc < 2) {
-		printf("Usage: %s <COM port>\n", argv[0]);
+		//printf("Usage: %s <COM port>\n", argv[0]);
+		//return 0;
+		argv[1] = "\\\\.\\COM15";
 	}
 
-	SerialPort conn(argv[1], 115200);
+	SerialPort conn(argv[1], CBR_115200);
 
 	vector<vector<float>> receivers;
 	for (int i = 0; i < NUM_RECEIVERS; i++) {
@@ -88,48 +90,65 @@ int main(int argc, char ** argv)
 	vector<float> x(NUM_RECEIVERS, 0);
 	vector<vector<float>> receiver_graph;
 	for (int i = 0; i < NUM_RECEIVERS; i++) {
-		receivers.push_back(vector<float>(NUM_RECEIVERS, 0));
+		receiver_graph.push_back(vector<float>(NUM_RECEIVERS, 0));
 	}
 
-	char mode = 'q';
+	char mode = 'p';
 
 	Localizer local(receivers, 0);
-	char buffer[BUFFER_SIZE];
-	std::string data = "";
+	char buffer[BUFFER_SIZE + 1];
+	string data = "";
 
-	while (mode != 27) {
-		if (_kbhit()) {
-			mode = (char)_getch();
+	char modes[] = { 'Q', 'P', 'C', 'N', 'L', VK_ESCAPE };
+	auto lastkp = std::chrono::steady_clock::now();
+
+	while (mode != VK_ESCAPE) {
+		auto ctime = std::chrono::steady_clock::now();
+		if (std::chrono::duration_cast<std::chrono::milliseconds>(ctime - lastkp).count() > 1000) {
+			for (int i = 0; i < sizeof(modes); i++) {
+				if ((GetAsyncKeyState(modes[i]) & 0x8000) != 0) {
+					mode = modes[i];
+					printf("Switched to mode %c\n", mode);
+					lastkp = ctime;
+				}
+			}
+		}
+
+		if (conn.isConnected()) {
+			int read = conn.read(buffer, BUFFER_SIZE);
+			if (read > 0) {
+				data = data + string(buffer, read);
+			}
 		}
 
 		switch (mode) {
-		case 'q': // Query
-			if (conn.isConnected()) {
-				int read = conn.read(buffer, BUFFER_SIZE);
-				data = data + buffer;
-			}
+		case 'Q': // Query
+		case 'P': // Poll
+		case 'C': // Send polls
+		case 'N': // Send queries
+			buffer[0] = mode;
+			conn.write(buffer, 1);
+			mode = ' ';
 			break;
-		case 'p': // Poll
-			if (conn.isConnected()) {
-				int read = conn.read(buffer, BUFFER_SIZE);
-				data = data + buffer;
-				high_resolution_clock::time_point t1 = high_resolution_clock::now();
-				x = local.localize(x, dist);
-				high_resolution_clock::time_point t2 = high_resolution_clock::now();
-				auto duration = duration_cast<microseconds>(t2 - t1).count();
-				printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
-			}
-			break;
-		case 'l': // Localize
+			/*
+			high_resolution_clock::time_point t1 = high_resolution_clock::now();
+			x = local.localize(x, dist);
+			high_resolution_clock::time_point t2 = high_resolution_clock::now();
+			auto duration = duration_cast<microseconds>(t2 - t1).count();
+			printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
+			*/
+		case 'L': // Localize
 			generateGraph(receiver_graph, receivers);
 			local = Localizer(receivers, r2z);
-			mode = 'p';
+			mode = ' ';
+			break;
+		default:
 			break;
 		}
 
 		// Parse data
-		int index;
-		while ((index = data.find("\n")) != std::string::npos) {
+		size_t index;
+		while ((index = data.find("\n")) != string::npos) {
 			string result = data.substr(0, index);
 			printf("%s\n", result.c_str());
 			if (result[0] == 'P') { // Poll result
@@ -140,7 +159,7 @@ int main(int argc, char ** argv)
 					tag--;
 				}
 			}
-			else if (result[1] == 'Q') { // Query distance result
+			else if (result[0] == 'Q') { // Query distance result
 				int tagFrom, tagTo, samples;
 				float total_distance;
 				int read = sscanf_s(result.c_str(), "Q,%d,%d,%d,%f", &tagFrom, &tagTo, &samples, &total_distance);
@@ -150,7 +169,7 @@ int main(int argc, char ** argv)
 					receiver_graph[tagFrom][tagTo] = total_distance / (float)samples;
 				}
 			}
-			data.erase(0, index);
+			data.erase(0, index + 1);
 		}
 	}
 	return 0;
