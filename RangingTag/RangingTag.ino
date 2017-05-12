@@ -668,6 +668,15 @@ void loop_send() {
 
     DW1000.getData(data, LEN_DATA);
     byte msgId = data[0];
+    if (msgId == CHANGE_MODE) {
+      if (data[1] == DWID) {
+        change_mode = data[2];
+#ifdef DEBUG
+        Serial.print(F("Changing mode to ")); Serial.println(change_mode);
+#endif
+        return;
+      }
+    }
     if (msgId == QUERY) {
       if (data[1] == DWID) { // Make sure this query is directed to us
         transmitQueryData();
