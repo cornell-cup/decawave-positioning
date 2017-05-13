@@ -102,6 +102,7 @@ int main(int argc, char ** argv)
 
 	char modes[] = { 'Q', 'P', 'C', 'N', 'L', VK_ESCAPE };
 	auto lastkp = std::chrono::steady_clock::now();
+	bool localized = false;
 
 	while (mode != VK_ESCAPE) {
 		auto ctime = std::chrono::steady_clock::now();
@@ -133,6 +134,7 @@ int main(int argc, char ** argv)
 			break;
 		case 'L': // Localize
 			generateGraph(receiver_graph, receivers);
+			localized = true;
 			local = Localizer(receivers, r2z);
 			mode = ' ';
 			break;
@@ -152,13 +154,15 @@ int main(int argc, char ** argv)
 				if (read == 2) {
 					tag--;
 					distance += calibration_offset;
+					dist[tag] = distance;
+					if (localized) {
+						high_resolution_clock::time_point t1 = high_resolution_clock::now();
+						x = local.localize(x, dist);
+						high_resolution_clock::time_point t2 = high_resolution_clock::now();
+						auto duration = duration_cast<microseconds>(t2 - t1).count();
+						printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
+					}
 				}
-				dist[tag] = distance;
-				high_resolution_clock::time_point t1 = high_resolution_clock::now();
-				x = local.localize(x, dist);
-				high_resolution_clock::time_point t2 = high_resolution_clock::now();
-				auto duration = duration_cast<microseconds>(t2 - t1).count();
-				printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
 			}
 			else if (result[0] == 'Q') { // Query distance result
 				int tagFrom, tagTo, samples;
