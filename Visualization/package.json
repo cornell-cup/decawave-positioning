@@ -10,7 +10,6 @@
   "license": "MIT",
   "dependencies": {
     "express": "^4.15.2",
-    "serialport": "^4.0.7",
-    "socket.io": "^1.7.3"
+    "ws": "^2.3.1"
   }
 }

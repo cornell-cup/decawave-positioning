@@ -24,12 +24,18 @@
     <ClCompile Include="Localizer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="easywsclient.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="GaussNewton.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Localizer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="easywsclient.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

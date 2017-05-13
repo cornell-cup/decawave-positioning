@@ -1,132 +1,35 @@
 <html>
   <head>
-    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/1.7.3/socket.io.js"></script>
     <script type="text/javascript" src="https://aframe.io/releases/0.5.0/aframe.min.js"></script>
     <script type="text/javascript">
-let socket = io.connect('ws://localhost:9000');
-let tag_dists = [];
-let tag_geo = [];
+let socket = new WebSocket('ws://localhost:9000');
+let socket_connected = false;
 
-// Parse tags into a geometry
-socket.on('tags', function(tags) {
-  // Number of tags
-  let NUM_TAGS = tags.length - 1;
+socket.onopen = function() {
+  console.log("Opened");
+  socket_connected = true;
+  socket.send(JSON.stringify({ "type": "get tags" }));
+};
 
-  // Distance lookup between tags
-  tag_dists = [];
-  for (let i = 0; i <= NUM_TAGS; i++) {
-    tag_dists.push([]);
-    for (let j = 0; j <= NUM_TAGS; j++) {
-      tag_dists[i].push(0.0);
+socket.onmessage = function(e) {
+  let data = JSON.parse(e.data);
+  if (data.type == "tags") {
+    for (let i = 0; i < data.tags.length; i++) {
+      document.getElementById("tag" + i).setAttribute("position", data.tags[i]);
     }
   }
-  console.log(tag_dists);
-  for (let tagFrom = 1; tagFrom <= NUM_TAGS; tagFrom++) {
-    for (let tagTo = 1; tagTo <= NUM_TAGS; tagTo++) {
-      let d1 = tags[tagFrom].to[tagTo];
-      let d2 = tags[tagTo].to[tagFrom];
-      if (d1 > 0 && d2 > 0) {
-        tag_dists[tagFrom][tagTo] = (d1 + d2) * 0.5;
-        tag_dists[tagTo][tagFrom] = (d1 + d2) * 0.5;
-      }
-    }
+  else if (data.type == "position") {
+    document.getElementById("anchor").setAttribute("position", data.position);
   }
-
-  // Tag positions
-  tag_geo = [];
-  for (let i = 0; i <= NUM_TAGS; i++) {
-    tag_geo.push(new THREE.Vector3(0.0, 0.0, 0.0));
-  }
-  // Assume the first tag is at a certain point
-  let origin = new THREE.Vector3(-7.3, 1.1, 3.4);
-  tag_geo[1].copy(origin);
-  // Assume the second tag is in a direction
-  let direction = new THREE.Vector3(4.2, -0.3, 1.8).normalize();
-  tag_geo[2].copy(tag_geo[1]).addScaledVector(direction, tag_dists[1][2]);
-  // Assume the third tag is in the plane in the direction of the given vector
-  let inplane = new THREE.Vector3(1.0, -0.28, 1.0).normalize();
-  let semip = (tag_dists[1][2] + tag_dists[2][3] + tag_dists[1][3]) / 2.0;
-  let area = Math.sqrt(semip * (semip - tag_dists[1][2]) * (semip - tag_dists[2][3]) * (semip - tag_dists[1][3]));
-  let height = 2.0 * area / tag_dists[1][2];
-  let length = Math.sqrt(tag_dists[1][3] * tag_dists[1][3] - height * height);
-  let normal = tag_geo[2].clone().sub(tag_geo[1]).normalize();
-  let orthog = normal.clone().multiplyScalar(inplane.dot(normal));
-  inplane.sub(orthog).normalize();
-  console.log(length, height);
-  tag_geo[3].lerpVectors(tag_geo[1], tag_geo[2], length / tag_dists[1][2]);
-  tag_geo[3].addScaledVector(inplane, height);
-
-  // Show tags in the scene
-  document.getElementById("tag1").setAttribute("position", tag_geo[1].x + " " + tag_geo[1].y + " " + tag_geo[1].z);
-  document.getElementById("tag2").setAttribute("position", tag_geo[2].x + " " + tag_geo[2].y + " " + tag_geo[2].z);
-  document.getElementById("tag3").setAttribute("position", tag_geo[3].x + " " + tag_geo[3].y + " " + tag_geo[3].z);
-
-  // Display results in the console
-  tag_dists.forEach(row => {
-    console.log(row.join(" , "));
-  });
-  tag_geo.forEach(row => {
-    console.log(row.x + " " + row.y + " " + row.z);
-  });
-});
-
-socket.on('distances', function(distances) {
-  console.log(distances);
-  // TODO use nonlinear least squares to solve for position
-  // Find the circle of intersection between two spheres
-  let semip = (tag_dists[1][2] + distances[1] + distances[2]) / 2.0;
-  let area = Math.sqrt(semip * (semip - tag_dists[1][2]) * (semip - distances[1]) * (semip - distances[2]));
-  let circle1radius = 2.0 * area / tag_dists[1][2];
-  let circle1length = Math.sqrt(distances[1] * distances[1] - circle1radius * circle1radius);
-  let circle1normal = tag_geo[2].clone().sub(tag_geo[1]).normalize();
-  let circle1center = new THREE.Vector3().lerpVectors(tag_geo[1], tag_geo[2], circle1length / tag_dists[1][2]);
-  // Find the circle of intersection between sphere and first circle's plane
-  let d = Math.abs(circle1normal.dot(tag_geo[3]) - circle1normal.dot(circle1center));
-  if (distances[3] < d) { // No intersection
-    console.log("No plane intersection");
-    return;
-  }
-  let circle2radius = Math.sqrt(distances[3] * distances[3] - d * d);
-  let circle2center = tag_geo[3].clone().addScaledVector(circle1normal, d);
-
-  // Calculate the intersections of the circles
-  let c2c = circle1center.distanceTo(circle2center);
-  if (c2c > circle1radius + circle2radius) {
-    console.log("No circle intersection");
-    return;
-  }
-  console.log(circle1radius, circle2radius, c2c);
-  semip = (circle1radius + circle2radius + c2c) / 2.0;
-  area = Math.sqrt(semip * (semip - circle1radius) * (semip - circle2radius) * (semip - c2c));
-  let height = 2.0 * area / c2c;
-  let length = Math.sqrt(circle1radius * circle1radius - height * height);
-  let obtuse = Math.sqrt(circle2radius * circle2radius - height * height);
-  if (obtuse > c2c) {
-    length = -length;
-  }
-  let center = new THREE.Vector3().lerpVectors(circle1center, circle2center, length / c2c);
-  let dir = circle2center.clone().sub(circle1center).cross(circle1normal).normalize();
-  let pos1 = center.clone().addScaledVector(dir, height);
-  let pos2 = center.clone().addScaledVector(dir, -height);
-  console.log(height, length);
-
-  // Show anchors in the scene
-  document.getElementById("anchor1").setAttribute("position", pos1.x + " " + pos1.y + " " + pos1.z);
-  document.getElementById("anchor2").setAttribute("position", pos2.x + " " + pos2.y + " " + pos2.z);
-
-  // Display results in the console
-  console.log(pos1.x + " " + pos1.y + " " + pos1.z);
-  console.log(pos2.x + " " + pos2.y + " " + pos2.z);
-});
+};
 
 window.addEventListener('load', function() {
-  socket.emit("request tags");
   frame();
 });
 
 function frame() {
-  if (tag_geo.length > 0) {
-    socket.emit("request distances");
+  if (socket_connected) {
+    socket.send(JSON.stringify({ "type": "get position" }));
   }
   setTimeout(frame, 100);
 }
@@ -135,19 +38,15 @@ function frame() {
   <body>
     <a-scene>
       <a-assets>
-        <a-asset-item id="room-obj" src="resources/RhodesConferenceRoom.obj"></a-asset-item>
-        <a-asset-item id="room-mtl" src="resources/RhodesConferenceRoom.mtl"></a-asset-item>
+        <a-asset-item id="room-obj" src="resources/ccrt-lab.obj"></a-asset-item>
+        <a-asset-item id="room-mtl" src="resources/ccrt-lab.mtl"></a-asset-item>
       </a-assets>
 
       <a-entity obj-model="obj: #room-obj; mtl: #room-mtl"></a-entity>
-      <a-sphere id="tag1" position="0 0 0" radius="0.05" color="#FF0000"></a-sphere>
-      <a-sphere id="tag2" position="0 0 0" radius="0.05" color="#00FF00"></a-sphere>
-      <a-sphere id="tag3" position="0 0 0" radius="0.05" color="#0000FF"></a-sphere>
-      <a-sphere id="anchor1" position="0 0 0" radius="0.1" color="#202020"></a-sphere>
-      <a-sphere id="anchor2" position="0 0 0" radius="0.1" color="#202020"></a-sphere>
-      <a-sphere id="debug1" position="0 0 0" radius="0.1" color="#202020"></a-sphere>
-      <a-sphere id="debug2" position="0 0 0" radius="0.1" color="#202020"></a-sphere>
-      <a-sphere id="debug3" position="0 0 0" radius="0.1" color="#202020"></a-sphere>
+      <a-sphere id="tag0" position="0 0 0" radius="0.05" color="#FF0000"></a-sphere>
+      <a-sphere id="tag1" position="0 0 0" radius="0.05" color="#00FF00"></a-sphere>
+      <a-sphere id="tag2" position="0 0 0" radius="0.05" color="#0000FF"></a-sphere>
+      <a-sphere id="anchor" position="0 0 0" radius="0.1" color="#00FFFF"></a-sphere>
     </a-scene>
   </body>
 </html>

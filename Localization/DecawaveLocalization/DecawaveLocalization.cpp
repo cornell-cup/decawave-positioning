@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "SerialPort.h"
+#include "easywsclient.hpp"
 
 #include "Localizer.h"
 #include "GaussNewton.h"
@@ -14,6 +15,7 @@ using std::vector;
 using std::string;
 
 using namespace std::chrono;
+using easywsclient::WebSocket;
 
 #define BUFFER_SIZE 4096
 constexpr int NUM_RECEIVERS = 3;
@@ -81,8 +83,15 @@ int main(int argc, char ** argv)
 		argv[1] = "\\\\.\\COM15";
 	}
 
+	// Initialize serial port connection
 	SerialPort conn(argv[1], CBR_115200);
+	// Initialize winsock
+	WSADATA wsadata;
+	WSAStartup(MAKEWORD(2, 2), &wsadata);
+	// Initialize websocket
+	WebSocket::pointer ws = WebSocket::from_direct("localhost", 9000, "");
 
+	// Structs for receivers
 	vector<vector<float>> receivers;
 	for (int i = 0; i < NUM_RECEIVERS; i++) {
 		receivers.push_back(vector<float>{0, 0, 0});
@@ -99,6 +108,7 @@ int main(int argc, char ** argv)
 	Localizer local(receivers, 0);
 	char buffer[BUFFER_SIZE + 1];
 	string data = "";
+	string msg = "";
 
 	char modes[] = { 'Q', 'P', 'C', 'N', 'L', VK_ESCAPE };
 	auto lastkp = std::chrono::steady_clock::now();
@@ -123,6 +133,7 @@ int main(int argc, char ** argv)
 			}
 		}
 
+		bool first = true;
 		switch (mode) {
 		case 'Q': // Query
 		case 'P': // Poll
@@ -136,6 +147,19 @@ int main(int argc, char ** argv)
 			generateGraph(receiver_graph, receivers);
 			localized = true;
 			local = Localizer(receivers, r2z);
+			// Send over websockets
+			msg = string("{\"type\":\"set tags\", \"tags\":[");
+			first = true;
+			for (auto receiver : receivers) {
+				if (first) first = false;
+				else msg += ",";
+				msg += string("\"") + std::to_string(-receiver[0]) + " " +
+					std::to_string(receiver[2]) + " " +
+					std::to_string(receiver[1]) + "\"";
+			}
+			msg += "]}";
+			ws->send(msg);
+			ws->poll();
 			mode = ' ';
 			break;
 		default:
@@ -144,6 +168,7 @@ int main(int argc, char ** argv)
 
 		// Parse data
 		size_t index;
+		msg = "";
 		while ((index = data.find("\n")) != string::npos) {
 			string result = data.substr(0, index);
 			printf("%s\t", result.c_str());
@@ -155,13 +180,6 @@ int main(int argc, char ** argv)
 					tag--;
 					distance += calibration_offset;
 					dist[tag] = distance;
-					if (localized) {
-						high_resolution_clock::time_point t1 = high_resolution_clock::now();
-						x = local.localize(x, dist);
-						high_resolution_clock::time_point t2 = high_resolution_clock::now();
-						auto duration = duration_cast<microseconds>(t2 - t1).count();
-						printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
-					}
 				}
 			}
 			else if (result[0] == 'Q') { // Query distance result
@@ -173,12 +191,23 @@ int main(int argc, char ** argv)
 					tagTo--;
 					receiver_graph[tagFrom][tagTo] = total_distance / (float)samples + calibration_offset;
 				}
-				printf("\n");
 			}
-			else {
-				printf("\n");
-			}
+			printf("\n");
 			data.erase(0, index + 1);
+		}
+		if (localized) {
+			high_resolution_clock::time_point t1 = high_resolution_clock::now();
+			x = local.localize(x, dist);
+			high_resolution_clock::time_point t2 = high_resolution_clock::now();
+			auto duration = duration_cast<microseconds>(t2 - t1).count();
+			printf("% 3.3f    % 3.3f    % 3.3f   %lld\n", x[0], x[1], x[2], duration);
+
+			// Send over websockets
+			msg = string("{\"type\":\"set position\", \"position\":\"") +
+				std::to_string(-x[0]) + " " + std::to_string(x[2]) + " " + std::to_string(x[1]) +
+				string("\"}");
+			ws->send(msg);
+			ws->poll();
 		}
 	}
 	return 0;

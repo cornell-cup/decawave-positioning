@@ -145,10 +145,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="DecawaveLocalization.cpp" />
+    <ClCompile Include="easywsclient.cpp" />
     <ClCompile Include="GaussNewton.cpp" />
     <ClCompile Include="Localizer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="easywsclient.hpp" />
     <ClInclude Include="GaussNewton.h" />
     <ClInclude Include="Localizer.h" />
   </ItemGroup>
